@@ -1,0 +1,12 @@
+services:
+  searxng-mcp:
+    image: ${SEARXNG_MCP_IMAGE:-searxng-mcp:local}
+    build: .
+    container_name: searxng-mcp
+    restart: unless-stopped
+    environment:
+      SEARXNG_INSTANCE_RU: ${SEARXNG_INSTANCE_RU:-}
+      SEARXNG_INSTANCE_VPS: ${SEARXNG_INSTANCE_VPS:-}
+      PORT: "3006"
+    ports:
+      - "3006:3006"

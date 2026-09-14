@@ -1,0 +1,12 @@
+# Single SearxNG instance. The `instance` argument is ignored.
+
+services:
+  searxng-mcp:
+    image: ghcr.io/dolphin2702/searxng-mcp:latest
+    container_name: searxng-mcp
+    restart: unless-stopped
+    environment:
+      SEARXNG_INSTANCE_RU: https://searxng.example.com
+      PORT: "3006"
+    ports:
+      - "3006:3006"

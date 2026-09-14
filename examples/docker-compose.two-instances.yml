@@ -1,0 +1,19 @@
+# Two SearxNG instances: RU + VPS.
+#
+# Client chooses which to use via the `instance` argument:
+#   ru       - only the RU instance
+#   vps      - only the VPS instance
+#   default  - try RU first, fall back to VPS on error/empty
+#   all      - try RU, then VPS regardless
+
+services:
+  searxng-mcp:
+    image: ghcr.io/dolphin2702/searxng-mcp:latest
+    container_name: searxng-mcp
+    restart: unless-stopped
+    environment:
+      SEARXNG_INSTANCE_RU: https://search.nikushchenko.ru
+      SEARXNG_INSTANCE_VPS: https://search.nikushchenko.com
+      PORT: "3006"
+    ports:
+      - "3006:3006"

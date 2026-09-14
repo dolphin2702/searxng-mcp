@@ -1,0 +1,8 @@
+.git
+.github
+node_modules
+npm-debug.log
+.env
+examples
+README.md
+README.ru.md
