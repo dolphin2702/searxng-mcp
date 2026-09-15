@@ -98,17 +98,6 @@ async function handleSearch({ q, count, instance = "default" }) {
 }
 
 // ========== УМНОЕ ИЗВЛЕЧЕНИЕ КОНТЕНТА ==========
-// Приоритеты:
-//   1. <article> — семантически это и есть статья
-//   2. <main> или [role="main"]
-//   3. <div> с максимальным количеством текста
-//   4. <body> как fallback
-//
-// Дополнительно:
-//   - вырезаем шумные теги (nav, header, footer, aside, script, style, ...)
-//   - удаляем короткие строки (меню, кнопки)
-//   - удаляем строки, повторяющиеся много раз (часто это навигация)
-
 const NOISE_SELECTORS = [
   "script", "style", "noscript", "iframe", "svg", "canvas", "form",
   "nav", "header", "footer", "aside",
@@ -123,18 +112,17 @@ const NOISE_SELECTORS = [
 function extractMainContent(html, maxChars) {
   const $ = cheerio.load(html);
 
-  // Remove noise
+  // 1. Remove noise
   for (const sel of NOISE_SELECTORS) {
     try { $(sel).remove(); } catch (_) { /* ignore invalid selectors */ }
   }
 
-  // Pick the best container
+  // 2. Pick the best container
   let container = $("article").first();
   if (!container.length) container = $("main").first();
   if (!container.length) container = $("[role='main']").first();
 
   if (!container.length) {
-    // Fall back to the <div> with the most text content
     let bestDiv = null;
     let bestLen = 0;
     $("div").each((_, el) => {
@@ -151,37 +139,61 @@ function extractMainContent(html, maxChars) {
 
   if (!container.length) container = $("body");
 
-  // Convert to text with paragraph breaks
-  // Replace block-level tags with newlines
+  // 3. Convert tables to pipe-separated rows BEFORE extracting text.
+  //    Each row becomes "cell1 | cell2 | cell3".
+  //    This preserves the meaning of columns (player | position | date | from | to).
+  container.find("table").each((_, table) => {
+    const rows = [];
+    $(table).find("tr").each((_, tr) => {
+      const cells = $(tr).find("td, th").map((_, cell) => {
+        return $(cell).text().replace(/\s+/g, " ").trim();
+      }).get();
+      if (cells.length > 0) {
+        rows.push(cells.join(" | "));
+      }
+    });
+    if (rows.length > 0) {
+      // Surround table with newlines so it stays a distinct block.
+      $(table).replaceWith("\n\n" + rows.join("\n") + "\n\n");
+    }
+  });
+
+  // 4. Convert block-level tags and <br> to newlines so paragraphs stay apart.
   container.find("br").replaceWith("\n");
   container.find("p, div, li, h1, h2, h3, h4, h5, h6, tr, section, article")
     .each((_, el) => {
       $(el).append("\n");
     });
 
+  // 5. Extract plain text and normalize whitespace.
   let text = container.text();
   text = text.replace(/[ \t]+/g, " ");
   text = text.replace(/\n{3,}/g, "\n\n");
 
-  // Filter out short lines (menus, buttons) and duplicated lines
+  // 6. Filter lines.
+  //    - Keep lines with pipe separators (table rows) unconditionally.
+  //    - Keep long lines (> 40 chars) or lines that end with sentence punctuation.
+  //    - Remove short lines that look like menu items or buttons.
+  //    - Remove lines that appear more than twice (boilerplate).
   const seen = new Map();
-  const lines = text.split("\n")
-    .map(l => l.trim())
-    .filter(l => l.length > 0);
+  const lines = text.split("\n").map(l => l.trim()).filter(l => l.length > 0);
 
   const filtered = [];
   for (const line of lines) {
-    // Skip short lines (< 40 chars) unless they look like a paragraph
-    if (line.length < 40 && !/[.!?]$/.test(line)) {
-      continue;
+    const isTableRow = line.includes(" | ");
+    if (!isTableRow) {
+      if (line.length < 40 && !/[.!?]$/.test(line)) {
+        continue;
+      }
     }
-    // Count occurrences to detect repeated navigation
     seen.set(line, (seen.get(line) || 0) + 1);
     filtered.push(line);
   }
 
-  // Remove lines that appear more than twice (usually nav/footer)
-  const cleaned = filtered.filter(l => (seen.get(l) || 0) <= 2);
+  const cleaned = filtered.filter(line => {
+    if (line.includes(" | ")) return true;  // keep all table rows
+    return (seen.get(line) || 0) <= 2;
+  });
 
   const result = cleaned.join("\n\n").trim();
   return result.slice(0, maxChars || 30000);
@@ -230,7 +242,6 @@ async function handleFetchGithubReadme({ url }) {
 }
 
 async function handleFetchArticle({ url }) {
-  // Same extraction logic as fetch_web_content, but returns longer text by default
   return handleFetchWebContent({ url, max_chars: 50000 });
 }
 
@@ -305,7 +316,7 @@ async function handleGetWeather({ city, days = 3 }) {
 }
 
 // ========== SDK-СЕРВЕР ==========
-const server = new McpServer({ name: "searxng-search", version: "0.2.0" });
+const server = new McpServer({ name: "searxng-search", version: "0.2.1" });
 
 server.tool(
   "web_search_xng",
@@ -359,7 +370,7 @@ app.post("/mcp", async (req, res) => {
       result: {
         protocolVersion: "2024-11-05",
         capabilities: { tools: {} },
-        serverInfo: { name: "searxng-search", version: "0.2.0" }
+        serverInfo: { name: "searxng-search", version: "0.2.1" }
       }
     });
   }
@@ -384,7 +395,7 @@ app.post("/mcp", async (req, res) => {
           },
           {
             name: "fetch_web_content",
-            description: "Fetch a web page and extract the MAIN text content (article body, not menus). Returns clean readable text without navigation, ads, or boilerplate.",
+            description: "Fetch a web page and extract the MAIN text content (article body). Tables are converted to pipe-separated rows (cell1 | cell2 | cell3), which is useful for structured data like transfer lists, schedules, and specs. Returns clean readable text without navigation, ads, or boilerplate.",
             inputSchema: {
               type: "object",
               properties: {
@@ -405,7 +416,7 @@ app.post("/mcp", async (req, res) => {
           },
           {
             name: "fetch_article",
-            description: "Fetch an article and return its full text (up to 50000 chars). Same extraction as fetch_web_content.",
+            description: "Fetch an article and return its full text (up to 50000 chars). Same extraction as fetch_web_content, with table support.",
             inputSchema: {
               type: "object",
               properties: { url: { type: "string" } },
